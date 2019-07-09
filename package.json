@@ -1,0 +1,30 @@
+{
+  "name": "siteForPractice",
+  "version": "0.0.1",
+  "description": "Restaraunt site",
+  "main": "src/main.js",
+  "private": true,
+  "scripts": {
+    "serv": "node -r babel-register ./scr/server/index.js",
+    "s": "node -r babel-register scr/redux-storage/index.js"
+  },
+  "dependencies": {
+    "babel-core": "latest",
+    "babel-preset-es2015-node6": "latest",
+    "babel-preset-stage-3": "^6.24.1",
+    "babel-register": "latest",
+    "body-parser": "^1.19.0",
+    "express": "^4.17.1",
+    "fs": "0.0.1-security",
+    "path": "^0.12.7",
+    "react": "^16.8.6",
+    "redux": "^4.0.2",
+    "uuid": "^3.3.2"
+  },
+  "babel": {
+    "presets": [
+      "es2015-node6",
+      "stage-3"
+    ]
+  }
+}
