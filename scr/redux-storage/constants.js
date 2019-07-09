@@ -1,3 +1,8 @@
+/*
+Объект с названиями type'ов действий. Для удобства.
+ */
+
+
 const constants = {
     ADD_RESERV: "ADD_RESERV",
     RATE_RESERV: "RATE_RESERV",

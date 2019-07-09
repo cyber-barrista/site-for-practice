@@ -2,6 +2,9 @@ import {createStore, combineReducers, applyMiddleware} from 'redux'
 import {reserves, dishes} from './storage-converters'
 import {writeJSON, readJSON} from  './local-state-writer'
 
+/*
+Здесь определяется и дефолтно экспортируется фабрика хранилищ. Код изоморфный, в первый аргумет фабрики передаётся true если хранилище предполоает использование на сервере и false если у клиента. Второй аргумент передаёт путь (от корневого каталога) к .json хранилищу состояния. Переданный .json инициирует начальное состояние.
+*/
 
 const clientLogger = store => next => action => {
     let result

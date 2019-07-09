@@ -1,5 +1,9 @@
 import constants from './constants'
 
+/*
+Чистые функции преобразователи для хранилища
+ */
+
 export const reserves = (state = [], action) => {
     switch (action.type) {
         case constants.ADD_RESERV:

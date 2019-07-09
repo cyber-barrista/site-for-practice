@@ -1,5 +1,9 @@
 import fs from 'fs'
 
+/*
+Вспомогательные функции для быстрой синхронной записи и чтения состояния с .json'а
+ */
+
 export const writeJSON = (path, obj = {}) => {
     try {
         fs.writeFileSync(path,JSON.stringify(obj))

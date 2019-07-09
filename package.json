@@ -6,7 +6,7 @@
   "private": true,
   "scripts": {
     "serv": "node -r babel-register ./scr/server/index.js",
-    "s": "node -r babel-register scr/redux-storage/index.js"
+    "stor": "node -r babel-register scr/redux-storage/index.js"
   },
   "dependencies": {
     "babel-core": "latest",
