@@ -5,20 +5,27 @@
   "main": "src/main.js",
   "private": true,
   "scripts": {
-    "serv": "node -r babel-register ./scr/server/index.js",
-    "stor": "node -r babel-register scr/redux-storage/index.js"
+    "build": "webpack",
+    "serv": "node -r babel-register ./src/server/index.js",
+    "stor": "node -r babel-register src/redux-storage/index.js"
   },
   "dependencies": {
-    "babel-core": "latest",
     "babel-preset-es2015-node6": "latest",
     "babel-preset-stage-3": "^6.24.1",
-    "babel-register": "latest",
+    "babel-register": "^6.26.0",
     "body-parser": "^1.19.0",
+    "es6-promise": "^4.2.8",
     "express": "^4.17.1",
     "fs": "0.0.1-security",
+    "isomorphic-fetch": "^2.2.1",
+    "jsonwebtoken": "^8.5.1",
+    "passport": "^0.4.0",
+    "passport-jwt": "^4.0.0",
     "path": "^0.12.7",
     "react": "^16.8.6",
-    "redux": "^4.0.2",
+    "react-dom": "^16.8.6",
+    "redux": "^4.0.4",
+    "redux-thunk": "^2.3.0",
     "uuid": "^3.3.2"
   },
   "babel": {
@@ -26,5 +33,14 @@
       "es2015-node6",
       "stage-3"
     ]
+  },
+  "devDependencies": {
+    "babel-core": "^6.26.3",
+    "babel-loader": "^7.0.0",
+    "babel-preset-env": "^1.7.0",
+    "babel-preset-react": "^6.24.1",
+    "babel-preset-stage-0": "^6.24.1",
+    "webpack": "^4.35.3",
+    "webpack-cli": "^3.3.6"
   }
 }
