@@ -1,7 +1,10 @@
 import {createStore, combineReducers, applyMiddleware} from 'redux'
 import thunk from 'redux-thunk'
 import {reserves, dishes} from './storage-converters'
-import {writeJSON, readJSON} from  './local-state-writer'
+import Reserve from '../database/reserves'
+import Dish from '../database/dishes'
+import delAndSet from '../database/clear-set'
+
 
 /*
  Здесь определяется и дефолтно экспортируется фабрика хранилищ. Код изоморфный, в первый аргумет фабрики передаётся true если хранилище предполоает использование на сервере и false если у клиента. Второй аргумент передаёт путь (от корневого каталога) к .json хранилищу состояния. Переданный .json инициирует начальное состояние.
@@ -30,15 +33,16 @@ const middleware = server => [
     (server) ? serverLogger : clientLogger, thunk
 ]
 
-const saver = path => store => next => action => {
+const saver = store => next => action => {
     let result = next(action)
-    writeJSON(path, store.getState())
+    delAndSet(store.getState(), Reserve, Dish)
     return result
 }
 
-const storeFactory = (server = false, path = './src/redux-storage/state.json') =>
-    applyMiddleware(...middleware(server), saver(path))(createStore)(
-        combineReducers({reserves, dishes}),
-        readJSON(path)
+const storeFactory = (server = false, initialState) =>
+    applyMiddleware(...middleware(server), saver)(createStore)(
+        combineReducers({reserves, dishes},
+            initialState
+        )
     )
 export default storeFactory

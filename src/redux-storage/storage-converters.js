@@ -43,8 +43,8 @@ const reserve = (state = {}, action) => {
         case constants.ADD_RESERV:
             console.log('here')
             return {
-                id: action.id,
-                evantDate: action.eventDate,
+                id: action._id,
+                eventDate: action.eventDate,
                 eventTime: action.eventTime,
                 quantity: action.quantity,
                 visitors: action.visitors,
@@ -53,7 +53,7 @@ const reserve = (state = {}, action) => {
                 status: "no",
             }
         case constants.RATE_RESERV:
-            return (state.id !== action.id) ?
+            return (state._id !== action._id) ?
                 state :
                 {
                     ...state,
@@ -68,7 +68,7 @@ const reserve = (state = {}, action) => {
 const dish = (state = {}, action) => {
     switch (action.type) {
         case constants.RATE_DISH:
-            return (state.id !== action.id) ?
+            return (state._id !== action._id) ?
                 state :
                 {
                     ...state,
@@ -80,7 +80,7 @@ const dish = (state = {}, action) => {
                 }
         case constants.ADD_DISH:
             return {
-                id: action.id,
+                id: action._id,
                 name: action.name,
                 smallDescription: action.smallDescription,
                 fullDescription: action.fullDescription,
@@ -111,7 +111,7 @@ const recipe = (state = {}, action) => {
         case constants.RATE_DISH:
             let result
             for (let recipe of action.recipes) {
-                if (state.id == recipe.id) {
+                if (state._id == recipe._id) {
                     result = {
                         ingredient: recipe.ingredient,
                         amount: recipe.amount,
