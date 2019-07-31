@@ -5,6 +5,8 @@ import constants from '../redux-storage/constants'
 import passport from './authentication/JwtPassport'
 
 const dispatchAndRespond = (req, res, action) => {
+    console.log(action)
+    req.store.dispatch(action)
     res.status(200)
     res.json(action)
 }
@@ -38,6 +40,7 @@ adminDish.put('/', passport.authenticate('jwt', {session: false}),
     (req, res) => {
         dispatchAndRespond(req, res, {
             type: constants.RATE_DISH,
+            _id: req.body._id,
             name: req.body.name,
             smallDescription: req.body.smallDescription,
             fullDescription: req.body.fullDescription,

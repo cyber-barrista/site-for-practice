@@ -13,7 +13,7 @@ import delAndSet from '../database/clear-set'
 
 const clientLogger = store => next => action => {
     let result
-    console.groupCollapsed("dispatching", action.type)
+    console.groupCollapsed("dispatching", 'some')
     console.log('prev state', store.getState())
     console.log('action', action)
     result = next(action)
@@ -23,26 +23,31 @@ const clientLogger = store => next => action => {
 }
 
 const serverLogger = store => next => action => {
-    console.log('/n dispatching server action')
-    console.log(action)
-    console.log('/n')
-    return next(action)
+    let result
+    console.log('prev state', store.getState())
+    console.log('action', action)
+    result = next(action)
+    console.log('next state', store.getState())
+    return result
 }
 
 const middleware = server => [
     (server) ? serverLogger : clientLogger, thunk
 ]
 
-const saver = store => next => action => {
+
+const saver = server => store => next => action => {
     let result = next(action)
-    delAndSet(store.getState(), Reserve, Dish)
+    if (server) {
+        delAndSet(store.getState(), Reserve, Dish)
+    }
     return result
 }
 
 const storeFactory = (server = false, initialState) =>
-    applyMiddleware(...middleware(server), saver)(createStore)(
-        combineReducers({reserves, dishes},
+    applyMiddleware(...middleware(server), saver(server))(createStore)(
+        combineReducers({reserves, dishes}),
             initialState
         )
-    )
+
 export default storeFactory

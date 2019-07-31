@@ -1,8 +1,13 @@
 import React from 'react'
+import Form from './form'
+import Navigation from './navigation'
 
 const App = (props) => {
     return (
-        <h1>User info phgggfage</h1>
+        <div className="app">
+            <Navigation/>
+            <Form />
+        </div>
     )
 }
 

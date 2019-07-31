@@ -21144,6 +21144,23 @@ module.exports = Array.isArray || function (arr) {
 
 /***/ }),
 
+/***/ "./node_modules/isomorphic-fetch/fetch-npm-browserify.js":
+/*!***************************************************************!*\
+  !*** ./node_modules/isomorphic-fetch/fetch-npm-browserify.js ***!
+  \***************************************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+// the whatwg-fetch polyfill installs the fetch() function
+// on the global object (window or self)
+//
+// Return that as the export for use in Webpack, Browserify etc.
+__webpack_require__(/*! whatwg-fetch */ "./node_modules/whatwg-fetch/fetch.js");
+module.exports = self.fetch.bind(self);
+
+
+/***/ }),
+
 /***/ "./node_modules/kareem/index.js":
 /*!**************************************!*\
   !*** ./node_modules/kareem/index.js ***!
@@ -23606,7 +23623,7 @@ Document.prototype.$set = function $set(path, val, type, options) {
   } else {
     for (i = 0; i < parts.length; ++i) {
       const subpath = parts.slice(0, i + 1).join('.');
-      if (this.get(subpath) === null) {
+      if (this.get(subpath, null, { getters: false }) === null) {
         pathToMark = subpath;
         break;
       }
@@ -24589,10 +24606,18 @@ function _getPathsToValidate(doc) {
     }
 
     const val = doc.$__getValue(path);
-    if (val) {
+    _pushNestedArrayPaths(val, paths, path);
+  }
+
+  function _pushNestedArrayPaths(val, paths, path) {
+    if (val != null) {
       const numElements = val.length;
       for (let j = 0; j < numElements; ++j) {
-        paths.push(path + '.' + j);
+        if (Array.isArray(val[j])) {
+          _pushNestedArrayPaths(val[j], paths, path + '.' + j);
+        } else {
+          paths.push(path + '.' + j);
+        }
       }
     }
   }
@@ -25679,7 +25704,15 @@ Document.prototype.inspect = function(options) {
     opts = options;
     opts.minimize = false;
   }
-  return this.toObject(opts);
+  const ret = this.toObject(opts);
+
+  if (ret == null) {
+    // If `toObject()` returns null, `this` is still an object, so if `inspect()`
+    // prints out null this can cause some serious confusion. See gh-7942.
+    return 'MongooseDocument { ' + ret + ' }';
+  }
+
+  return ret;
 };
 
 if (inspect.custom) {
@@ -25700,7 +25733,11 @@ if (inspect.custom) {
  */
 
 Document.prototype.toString = function() {
-  return inspect(this.inspect());
+  const ret = this.inspect();
+  if (typeof ret === 'string') {
+    return ret;
+  }
+  return inspect(ret);
 };
 
 /**
@@ -27877,8 +27914,10 @@ function applyHooks(model, schema, options) {
 
   objToDecorate.$__save = middleware.
     createWrapper('save', objToDecorate.$__save, null, kareemOptions);
+
+  objToDecorate.$__originalValidate = objToDecorate.$__originalValidate || objToDecorate.$__validate;
   objToDecorate.$__validate = middleware.
-    createWrapper('validate', objToDecorate.$__validate, null, kareemOptions);
+    createWrapper('validate', objToDecorate.$__originalValidate, null, kareemOptions);
   objToDecorate.$__remove = middleware.
     createWrapper('remove', objToDecorate.$__remove, null, kareemOptions);
   objToDecorate.$__deleteOne = middleware.
@@ -28686,7 +28725,7 @@ function applyTimestampsToChildren(now, update, schema) {
           createdAt = handleTimestampOption(timestamps, 'createdAt');
           updatedAt = handleTimestampOption(timestamps, 'updatedAt');
 
-          if (updatedAt == null) {
+          if (!timestamps || updatedAt == null) {
             continue;
           }
 
@@ -28711,6 +28750,10 @@ function applyTimestampsToChildren(now, update, schema) {
           timestamps = path.schema.options.timestamps;
           createdAt = handleTimestampOption(timestamps, 'createdAt');
           updatedAt = handleTimestampOption(timestamps, 'updatedAt');
+
+          if (!timestamps) {
+            continue;
+          }
 
           if (updatedAt != null) {
             update.$set[key][updatedAt] = now;
@@ -30554,6 +30597,10 @@ function getPositionalPathType(self, path) {
 
     // ignore if its just a position segment: path.0.subpath
     if (!/\D/.test(subpath)) {
+      // Nested array
+      if (val instanceof MongooseTypes.Array && i !== last) {
+        val = val.caster;
+      }
       continue;
     }
 
@@ -30627,6 +30674,11 @@ Schema.prototype.queue = function(name, args) {
  *
  *     // Equivalent to calling `pre()` on `find`, `findOne`, `findOneAndUpdate`.
  *     toySchema.pre(/^find/, function(next) {
+ *       console.log(this.getFilter());
+ *     });
+ *
+ *     // Equivalent to calling `pre()` on `updateOne`, `findOneAndUpdate`.
+ *     toySchema.pre(['updateOne', 'findOneAndUpdate'], function(next) {
  *       console.log(this.getFilter());
  *     });
  *
@@ -31424,6 +31476,322 @@ exports.ObjectId = MongooseTypes.ObjectId;
 
 /***/ }),
 
+/***/ "./node_modules/mongoose/lib/schema/SingleNestedPath.js":
+/*!**************************************************************!*\
+  !*** ./node_modules/mongoose/lib/schema/SingleNestedPath.js ***!
+  \**************************************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+/*!
+ * Module dependencies.
+ */
+
+const CastError = __webpack_require__(/*! ../error/cast */ "./node_modules/mongoose/lib/error/cast.js");
+const EventEmitter = __webpack_require__(/*! events */ "./node_modules/events/events.js").EventEmitter;
+const ObjectExpectedError = __webpack_require__(/*! ../error/objectExpected */ "./node_modules/mongoose/lib/error/objectExpected.js");
+const SchemaType = __webpack_require__(/*! ../schematype */ "./node_modules/mongoose/lib/schematype.js");
+const $exists = __webpack_require__(/*! ./operators/exists */ "./node_modules/mongoose/lib/schema/operators/exists.js");
+const castToNumber = __webpack_require__(/*! ./operators/helpers */ "./node_modules/mongoose/lib/schema/operators/helpers.js").castToNumber;
+const discriminator = __webpack_require__(/*! ../helpers/model/discriminator */ "./node_modules/mongoose/lib/helpers/model/discriminator.js");
+const geospatial = __webpack_require__(/*! ./operators/geospatial */ "./node_modules/mongoose/lib/schema/operators/geospatial.js");
+const get = __webpack_require__(/*! ../helpers/get */ "./node_modules/mongoose/lib/helpers/get.js");
+const getConstructor = __webpack_require__(/*! ../helpers/discriminator/getConstructor */ "./node_modules/mongoose/lib/helpers/discriminator/getConstructor.js");
+const internalToObjectOptions = __webpack_require__(/*! ../options */ "./node_modules/mongoose/lib/options.js").internalToObjectOptions;
+
+let Subdocument;
+
+module.exports = SingleNestedPath;
+
+/**
+ * Single nested subdocument SchemaType constructor.
+ *
+ * @param {Schema} schema
+ * @param {String} key
+ * @param {Object} options
+ * @inherits SchemaType
+ * @api public
+ */
+
+function SingleNestedPath(schema, path, options) {
+  this.caster = _createConstructor(schema);
+  this.caster.path = path;
+  this.caster.prototype.$basePath = path;
+  this.schema = schema;
+  this.$isSingleNested = true;
+  SchemaType.call(this, path, options, 'Embedded');
+}
+
+/*!
+ * ignore
+ */
+
+SingleNestedPath.prototype = Object.create(SchemaType.prototype);
+SingleNestedPath.prototype.constructor = SingleNestedPath;
+
+/*!
+ * ignore
+ */
+
+function _createConstructor(schema, baseClass) {
+  // lazy load
+  Subdocument || (Subdocument = __webpack_require__(/*! ../types/subdocument */ "./node_modules/mongoose/lib/types/subdocument.js"));
+
+  const _embedded = function SingleNested(value, path, parent) {
+    const _this = this;
+
+    this.$parent = parent;
+    Subdocument.apply(this, arguments);
+
+    this.$session(this.ownerDocument().$session());
+
+    if (parent) {
+      parent.on('save', function() {
+        _this.emit('save', _this);
+        _this.constructor.emit('save', _this);
+      });
+
+      parent.on('isNew', function(val) {
+        _this.isNew = val;
+        _this.emit('isNew', val);
+        _this.constructor.emit('isNew', val);
+      });
+    }
+  };
+
+  const proto = baseClass != null ? baseClass.prototype : Subdocument.prototype;
+  _embedded.prototype = Object.create(proto);
+  _embedded.prototype.$__setSchema(schema);
+  _embedded.prototype.constructor = _embedded;
+  _embedded.schema = schema;
+  _embedded.$isSingleNested = true;
+  _embedded.events = new EventEmitter();
+  _embedded.prototype.toBSON = function() {
+    return this.toObject(internalToObjectOptions);
+  };
+
+  // apply methods
+  for (const i in schema.methods) {
+    _embedded.prototype[i] = schema.methods[i];
+  }
+
+  // apply statics
+  for (const i in schema.statics) {
+    _embedded[i] = schema.statics[i];
+  }
+
+  for (const i in EventEmitter.prototype) {
+    _embedded[i] = EventEmitter.prototype[i];
+  }
+
+  return _embedded;
+}
+
+/*!
+ * Special case for when users use a common location schema to represent
+ * locations for use with $geoWithin.
+ * https://docs.mongodb.org/manual/reference/operator/query/geoWithin/
+ *
+ * @param {Object} val
+ * @api private
+ */
+
+SingleNestedPath.prototype.$conditionalHandlers.$geoWithin = function handle$geoWithin(val) {
+  return { $geometry: this.castForQuery(val.$geometry) };
+};
+
+/*!
+ * ignore
+ */
+
+SingleNestedPath.prototype.$conditionalHandlers.$near =
+SingleNestedPath.prototype.$conditionalHandlers.$nearSphere = geospatial.cast$near;
+
+SingleNestedPath.prototype.$conditionalHandlers.$within =
+SingleNestedPath.prototype.$conditionalHandlers.$geoWithin = geospatial.cast$within;
+
+SingleNestedPath.prototype.$conditionalHandlers.$geoIntersects =
+  geospatial.cast$geoIntersects;
+
+SingleNestedPath.prototype.$conditionalHandlers.$minDistance = castToNumber;
+SingleNestedPath.prototype.$conditionalHandlers.$maxDistance = castToNumber;
+
+SingleNestedPath.prototype.$conditionalHandlers.$exists = $exists;
+
+/**
+ * Casts contents
+ *
+ * @param {Object} value
+ * @api private
+ */
+
+SingleNestedPath.prototype.cast = function(val, doc, init, priorVal) {
+  if (val && val.$isSingleNested) {
+    return val;
+  }
+
+  if (val != null && (typeof val !== 'object' || Array.isArray(val))) {
+    throw new ObjectExpectedError(this.path, val);
+  }
+
+  const Constructor = getConstructor(this.caster, val);
+
+  let subdoc;
+
+  // Only pull relevant selected paths and pull out the base path
+  const parentSelected = get(doc, '$__.selected', {});
+  const path = this.path;
+  const selected = Object.keys(parentSelected).reduce((obj, key) => {
+    if (key.startsWith(path + '.')) {
+      obj[key.substr(path.length + 1)] = parentSelected[key];
+    }
+    return obj;
+  }, {});
+
+  if (init) {
+    subdoc = new Constructor(void 0, selected, doc);
+    subdoc.init(val);
+  } else {
+    if (Object.keys(val).length === 0) {
+      return new Constructor({}, selected, doc);
+    }
+
+    return new Constructor(val, selected, doc, undefined, { priorDoc: priorVal });
+  }
+
+  return subdoc;
+};
+
+/**
+ * Casts contents for query
+ *
+ * @param {string} [$conditional] optional query operator (like `$eq` or `$in`)
+ * @param {any} value
+ * @api private
+ */
+
+SingleNestedPath.prototype.castForQuery = function($conditional, val) {
+  let handler;
+  if (arguments.length === 2) {
+    handler = this.$conditionalHandlers[$conditional];
+    if (!handler) {
+      throw new Error('Can\'t use ' + $conditional);
+    }
+    return handler.call(this, val);
+  }
+  val = $conditional;
+  if (val == null) {
+    return val;
+  }
+
+  if (this.options.runSetters) {
+    val = this._applySetters(val);
+  }
+
+  const Constructor = getConstructor(this.caster, val);
+
+  try {
+    val = new Constructor(val);
+  } catch (error) {
+    // Make sure we always wrap in a CastError (gh-6803)
+    if (!(error instanceof CastError)) {
+      throw new CastError('Embedded', val, this.path, error);
+    }
+    throw error;
+  }
+  return val;
+};
+
+/**
+ * Async validation on this single nested doc.
+ *
+ * @api private
+ */
+
+SingleNestedPath.prototype.doValidate = function(value, fn, scope, options) {
+  const Constructor = getConstructor(this.caster, value);
+
+  if (options && options.skipSchemaValidators) {
+    if (!(value instanceof Constructor)) {
+      value = new Constructor(value, null, scope);
+    }
+
+    return value.validate(fn);
+  }
+
+  SchemaType.prototype.doValidate.call(this, value, function(error) {
+    if (error) {
+      return fn(error);
+    }
+    if (!value) {
+      return fn(null);
+    }
+
+    value.validate(fn);
+  }, scope);
+};
+
+/**
+ * Synchronously validate this single nested doc
+ *
+ * @api private
+ */
+
+SingleNestedPath.prototype.doValidateSync = function(value, scope, options) {
+  if (!options || !options.skipSchemaValidators) {
+    const schemaTypeError = SchemaType.prototype.doValidateSync.call(this, value, scope);
+    if (schemaTypeError) {
+      return schemaTypeError;
+    }
+  }
+  if (!value) {
+    return;
+  }
+  return value.validateSync();
+};
+
+/**
+ * Adds a discriminator to this single nested subdocument.
+ *
+ * ####Example:
+ *     const shapeSchema = Schema({ name: String }, { discriminatorKey: 'kind' });
+ *     const schema = Schema({ shape: shapeSchema });
+ *
+ *     const singleNestedPath = parentSchema.path('child');
+ *     singleNestedPath.discriminator('Circle', Schema({ radius: Number }));
+ *
+ * @param {String} name
+ * @param {Schema} schema fields to add to the schema for instances of this sub-class
+ * @see discriminators /docs/discriminators.html
+ * @api public
+ */
+
+SingleNestedPath.prototype.discriminator = function(name, schema) {
+  discriminator(this.caster, name, schema);
+
+  this.caster.discriminators[name] = _createConstructor(schema, this.caster);
+
+  return this.caster.discriminators[name];
+};
+
+/*!
+ * ignore
+ */
+
+SingleNestedPath.prototype.clone = function() {
+  const options = Object.assign({}, this.options);
+  const schematype = new this.constructor(this.schema, this.path, options);
+  schematype.validators = this.validators.slice();
+  schematype.caster.discriminators = Object.assign({}, this.caster.discriminators);
+  return schematype;
+};
+
+
+/***/ }),
+
 /***/ "./node_modules/mongoose/lib/schema/array.js":
 /*!***************************************************!*\
   !*** ./node_modules/mongoose/lib/schema/array.js ***!
@@ -31639,11 +32007,19 @@ SchemaArray.prototype.checkRequired = function checkRequired(value, doc) {
  */
 
 SchemaArray.prototype.enum = function() {
-  const instance = get(this, 'caster.instance');
-  if (instance !== 'String') {
-    throw new Error('`enum` can only be set on an array of strings, not ' + instance);
+  let arr = this; /* eslint consistent-this: 0 */
+  while (true) { /* eslint no-constant-condition: 0 */
+    const instance = get(arr, 'caster.instance');
+    if (instance === 'Array') {
+      arr = arr.caster;
+      continue;
+    }
+    if (instance !== 'String') {
+      throw new Error('`enum` can only be set on an array of strings, not ' + instance);
+    }
+    break;
   }
-  this.caster.enum.apply(this.caster, arguments);
+  arr.caster.enum.apply(arr.caster, arguments);
   return this;
 };
 
@@ -33117,7 +33493,7 @@ DocumentArray.prototype.constructor = DocumentArray;
  * Ignore
  */
 
-function _createConstructor(schema, options) {
+function _createConstructor(schema, options, baseClass) {
   Subdocument || (Subdocument = __webpack_require__(/*! ../types/embedded */ "./node_modules/mongoose/lib/types/embedded.js"));
 
   // compile an embedded document for this schema
@@ -33127,7 +33503,8 @@ function _createConstructor(schema, options) {
     this.$session(this.ownerDocument().$session());
   }
 
-  EmbeddedDocument.prototype = Object.create(Subdocument.prototype);
+  const proto = baseClass != null ? baseClass.prototype : Subdocument.prototype;
+  EmbeddedDocument.prototype = Object.create(proto);
   EmbeddedDocument.prototype.$__setSchema(schema);
   EmbeddedDocument.schema = schema;
   EmbeddedDocument.prototype.constructor = EmbeddedDocument;
@@ -33164,7 +33541,7 @@ DocumentArray.prototype.discriminator = function(name, schema) {
 
   schema = discriminator(this.casterConstructor, name, schema);
 
-  const EmbeddedDocument = _createConstructor(schema);
+  const EmbeddedDocument = _createConstructor(schema, null, this.casterConstructor);
   EmbeddedDocument.baseCasterConstructor = this.casterConstructor;
 
   try {
@@ -33523,312 +33900,6 @@ module.exports = DocumentArray;
 
 /***/ }),
 
-/***/ "./node_modules/mongoose/lib/schema/embedded.js":
-/*!******************************************************!*\
-  !*** ./node_modules/mongoose/lib/schema/embedded.js ***!
-  \******************************************************/
-/*! no static exports found */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-/*!
- * Module dependencies.
- */
-
-const CastError = __webpack_require__(/*! ../error/cast */ "./node_modules/mongoose/lib/error/cast.js");
-const EventEmitter = __webpack_require__(/*! events */ "./node_modules/events/events.js").EventEmitter;
-const ObjectExpectedError = __webpack_require__(/*! ../error/objectExpected */ "./node_modules/mongoose/lib/error/objectExpected.js");
-const SchemaType = __webpack_require__(/*! ../schematype */ "./node_modules/mongoose/lib/schematype.js");
-const $exists = __webpack_require__(/*! ./operators/exists */ "./node_modules/mongoose/lib/schema/operators/exists.js");
-const castToNumber = __webpack_require__(/*! ./operators/helpers */ "./node_modules/mongoose/lib/schema/operators/helpers.js").castToNumber;
-const discriminator = __webpack_require__(/*! ../helpers/model/discriminator */ "./node_modules/mongoose/lib/helpers/model/discriminator.js");
-const geospatial = __webpack_require__(/*! ./operators/geospatial */ "./node_modules/mongoose/lib/schema/operators/geospatial.js");
-const get = __webpack_require__(/*! ../helpers/get */ "./node_modules/mongoose/lib/helpers/get.js");
-const getConstructor = __webpack_require__(/*! ../helpers/discriminator/getConstructor */ "./node_modules/mongoose/lib/helpers/discriminator/getConstructor.js");
-const internalToObjectOptions = __webpack_require__(/*! ../options */ "./node_modules/mongoose/lib/options.js").internalToObjectOptions;
-
-let Subdocument;
-
-module.exports = Embedded;
-
-/**
- * Sub-schema schematype constructor
- *
- * @param {Schema} schema
- * @param {String} key
- * @param {Object} options
- * @inherits SchemaType
- * @api public
- */
-
-function Embedded(schema, path, options) {
-  this.caster = _createConstructor(schema);
-  this.caster.path = path;
-  this.caster.prototype.$basePath = path;
-  this.schema = schema;
-  this.$isSingleNested = true;
-  SchemaType.call(this, path, options, 'Embedded');
-}
-
-/*!
- * ignore
- */
-
-Embedded.prototype = Object.create(SchemaType.prototype);
-Embedded.prototype.constructor = Embedded;
-
-/*!
- * ignore
- */
-
-function _createConstructor(schema) {
-  // lazy load
-  Subdocument || (Subdocument = __webpack_require__(/*! ../types/subdocument */ "./node_modules/mongoose/lib/types/subdocument.js"));
-
-  const _embedded = function SingleNested(value, path, parent) {
-    const _this = this;
-
-    this.$parent = parent;
-    Subdocument.apply(this, arguments);
-
-    this.$session(this.ownerDocument().$session());
-
-    if (parent) {
-      parent.on('save', function() {
-        _this.emit('save', _this);
-        _this.constructor.emit('save', _this);
-      });
-
-      parent.on('isNew', function(val) {
-        _this.isNew = val;
-        _this.emit('isNew', val);
-        _this.constructor.emit('isNew', val);
-      });
-    }
-  };
-  _embedded.prototype = Object.create(Subdocument.prototype);
-  _embedded.prototype.$__setSchema(schema);
-  _embedded.prototype.constructor = _embedded;
-  _embedded.schema = schema;
-  _embedded.$isSingleNested = true;
-  _embedded.events = new EventEmitter();
-  _embedded.prototype.toBSON = function() {
-    return this.toObject(internalToObjectOptions);
-  };
-
-  // apply methods
-  for (const i in schema.methods) {
-    _embedded.prototype[i] = schema.methods[i];
-  }
-
-  // apply statics
-  for (const i in schema.statics) {
-    _embedded[i] = schema.statics[i];
-  }
-
-  for (const i in EventEmitter.prototype) {
-    _embedded[i] = EventEmitter.prototype[i];
-  }
-
-  return _embedded;
-}
-
-/*!
- * Special case for when users use a common location schema to represent
- * locations for use with $geoWithin.
- * https://docs.mongodb.org/manual/reference/operator/query/geoWithin/
- *
- * @param {Object} val
- * @api private
- */
-
-Embedded.prototype.$conditionalHandlers.$geoWithin = function handle$geoWithin(val) {
-  return { $geometry: this.castForQuery(val.$geometry) };
-};
-
-/*!
- * ignore
- */
-
-Embedded.prototype.$conditionalHandlers.$near =
-Embedded.prototype.$conditionalHandlers.$nearSphere = geospatial.cast$near;
-
-Embedded.prototype.$conditionalHandlers.$within =
-Embedded.prototype.$conditionalHandlers.$geoWithin = geospatial.cast$within;
-
-Embedded.prototype.$conditionalHandlers.$geoIntersects =
-  geospatial.cast$geoIntersects;
-
-Embedded.prototype.$conditionalHandlers.$minDistance = castToNumber;
-Embedded.prototype.$conditionalHandlers.$maxDistance = castToNumber;
-
-Embedded.prototype.$conditionalHandlers.$exists = $exists;
-
-/**
- * Casts contents
- *
- * @param {Object} value
- * @api private
- */
-
-Embedded.prototype.cast = function(val, doc, init, priorVal) {
-  if (val && val.$isSingleNested) {
-    return val;
-  }
-
-  if (val != null && (typeof val !== 'object' || Array.isArray(val))) {
-    throw new ObjectExpectedError(this.path, val);
-  }
-
-  const Constructor = getConstructor(this.caster, val);
-
-  let subdoc;
-
-  // Only pull relevant selected paths and pull out the base path
-  const parentSelected = get(doc, '$__.selected', {});
-  const path = this.path;
-  const selected = Object.keys(parentSelected).reduce((obj, key) => {
-    if (key.startsWith(path + '.')) {
-      obj[key.substr(path.length + 1)] = parentSelected[key];
-    }
-    return obj;
-  }, {});
-
-  if (init) {
-    subdoc = new Constructor(void 0, selected, doc);
-    subdoc.init(val);
-  } else {
-    if (Object.keys(val).length === 0) {
-      return new Constructor({}, selected, doc);
-    }
-
-    return new Constructor(val, selected, doc, undefined, { priorDoc: priorVal });
-  }
-
-  return subdoc;
-};
-
-/**
- * Casts contents for query
- *
- * @param {string} [$conditional] optional query operator (like `$eq` or `$in`)
- * @param {any} value
- * @api private
- */
-
-Embedded.prototype.castForQuery = function($conditional, val) {
-  let handler;
-  if (arguments.length === 2) {
-    handler = this.$conditionalHandlers[$conditional];
-    if (!handler) {
-      throw new Error('Can\'t use ' + $conditional);
-    }
-    return handler.call(this, val);
-  }
-  val = $conditional;
-  if (val == null) {
-    return val;
-  }
-
-  if (this.options.runSetters) {
-    val = this._applySetters(val);
-  }
-
-  const Constructor = getConstructor(this.caster, val);
-
-  try {
-    val = new Constructor(val);
-  } catch (error) {
-    // Make sure we always wrap in a CastError (gh-6803)
-    if (!(error instanceof CastError)) {
-      throw new CastError('Embedded', val, this.path, error);
-    }
-    throw error;
-  }
-  return val;
-};
-
-/**
- * Async validation on this single nested doc.
- *
- * @api private
- */
-
-Embedded.prototype.doValidate = function(value, fn, scope, options) {
-  const Constructor = getConstructor(this.caster, value);
-
-  if (options && options.skipSchemaValidators) {
-    if (!(value instanceof Constructor)) {
-      value = new Constructor(value, null, scope);
-    }
-
-    return value.validate(fn);
-  }
-
-  SchemaType.prototype.doValidate.call(this, value, function(error) {
-    if (error) {
-      return fn(error);
-    }
-    if (!value) {
-      return fn(null);
-    }
-
-    value.validate(fn);
-  }, scope);
-};
-
-/**
- * Synchronously validate this single nested doc
- *
- * @api private
- */
-
-Embedded.prototype.doValidateSync = function(value, scope, options) {
-  if (!options || !options.skipSchemaValidators) {
-    const schemaTypeError = SchemaType.prototype.doValidateSync.call(this, value, scope);
-    if (schemaTypeError) {
-      return schemaTypeError;
-    }
-  }
-  if (!value) {
-    return;
-  }
-  return value.validateSync();
-};
-
-/**
- * Adds a discriminator to this property
- *
- * @param {String} name
- * @param {Schema} schema fields to add to the schema for instances of this sub-class
- * @api public
- */
-
-Embedded.prototype.discriminator = function(name, schema) {
-  discriminator(this.caster, name, schema);
-
-  this.caster.discriminators[name] = _createConstructor(schema);
-
-  return this.caster.discriminators[name];
-};
-
-/*!
- * ignore
- */
-
-Embedded.prototype.clone = function() {
-  const options = Object.assign({}, this.options);
-  const schematype = new this.constructor(this.schema, this.path, options);
-  schematype.validators = this.validators.slice();
-  schematype.caster.discriminators = Object.assign({}, this.caster.discriminators);
-  return schematype;
-};
-
-
-/***/ }),
-
 /***/ "./node_modules/mongoose/lib/schema/index.js":
 /*!***************************************************!*\
   !*** ./node_modules/mongoose/lib/schema/index.js ***!
@@ -33852,7 +33923,7 @@ exports.Boolean = __webpack_require__(/*! ./boolean */ "./node_modules/mongoose/
 
 exports.DocumentArray = __webpack_require__(/*! ./documentarray */ "./node_modules/mongoose/lib/schema/documentarray.js");
 
-exports.Embedded = __webpack_require__(/*! ./embedded */ "./node_modules/mongoose/lib/schema/embedded.js");
+exports.Embedded = __webpack_require__(/*! ./SingleNestedPath */ "./node_modules/mongoose/lib/schema/SingleNestedPath.js");
 
 exports.Array = __webpack_require__(/*! ./array */ "./node_modules/mongoose/lib/schema/array.js");
 
@@ -35923,9 +35994,9 @@ SchemaType.prototype.default = function(val) {
  *     var s = new Schema({ loc: { type: [Number], index: '2d', sparse: true })
  *     var s = new Schema({ loc: { type: [Number], index: { type: '2dsphere', sparse: true }})
  *     var s = new Schema({ date: { type: Date, index: { unique: true, expires: '1d' }})
- *     Schema.path('my.path').index(true);
- *     Schema.path('my.date').index({ expires: 60 });
- *     Schema.path('my.path').index({ unique: true, sparse: true });
+ *     s.path('my.path').index(true);
+ *     s.path('my.date').index({ expires: 60 });
+ *     s.path('my.path').index({ unique: true, sparse: true });
  *
  * ####NOTE:
  *
@@ -35951,7 +36022,7 @@ SchemaType.prototype.index = function(options) {
  * ####Example:
  *
  *     var s = new Schema({ name: { type: String, unique: true }});
- *     Schema.path('name').index({ unique: true });
+ *     s.path('name').index({ unique: true });
  *
  * _NOTE: violating the constraint returns an `E11000` error from MongoDB when saving, not a Mongoose validation error._
  *
@@ -35984,7 +36055,7 @@ SchemaType.prototype.unique = function(bool) {
  * ###Example:
  *
  *      var s = new Schema({name : {type: String, text : true })
- *      Schema.path('name').index({text : true});
+ *      s.path('name').index({text : true});
  * @param {Boolean} bool
  * @return {SchemaType} this
  * @api public
@@ -36016,7 +36087,7 @@ SchemaType.prototype.text = function(bool) {
  * ####Example:
  *
  *     var s = new Schema({ name: { type: String, sparse: true } });
- *     Schema.path('name').index({ sparse: true });
+ *     s.path('name').index({ sparse: true });
  *
  * @param {Boolean} bool
  * @return {SchemaType} this
@@ -36464,15 +36535,15 @@ const handleIsAsync = util.deprecate(function handleIsAsync() {},
  *
  *     // or through the path API
  *
- *     Schema.path('name').required(true);
+ *     s.path('name').required(true);
  *
  *     // with custom error messaging
  *
- *     Schema.path('name').required(true, 'grrr :( ');
+ *     s.path('name').required(true, 'grrr :( ');
  *
  *     // or make a path conditionally required based on a function
  *     var isOver18 = function() { return this.age >= 18; };
- *     Schema.path('voterRegistrationId').required(isOver18);
+ *     s.path('voterRegistrationId').required(isOver18);
  *
  * The required validator uses the SchemaType's `checkRequired` function to
  * determine whether a given value satisfies the required validator. By default,
@@ -37379,7 +37450,6 @@ function MongooseArray(values, path, doc) {
   }
 
   arr[arrayPathSymbol] = path;
-  arr.validators = [];
   arr[arraySchemaSymbol] = void 0;
 
   // Because doc comes from the context of another function, doc === global
@@ -37721,6 +37791,8 @@ const populateModelSymbol = __webpack_require__(/*! ../helpers/symbols */ "./nod
 
 const _basePush = Array.prototype.push;
 
+const validatorsSymbol = Symbol('mongoose#MongooseCoreArray#validators');
+
 /*!
  * ignore
  */
@@ -37728,6 +37800,14 @@ const _basePush = Array.prototype.push;
 class CoreMongooseArray extends Array {
   get isMongooseArray() {
     return true;
+  }
+
+  get validators() {
+    return this[validatorsSymbol];
+  }
+
+  set validators(v) {
+    this[validatorsSymbol] = v;
   }
 
   /**
@@ -39820,7 +39900,7 @@ Subdocument.prototype.markModified = function(path) {
  * @param {String} path the field to mark as valid
  * @api private
  * @method $markValid
- * @receiver EmbeddedDocument
+ * @receiver Subdocument
  */
 
 Subdocument.prototype.$markValid = function(path) {
@@ -39941,7 +40021,7 @@ Subdocument.prototype.populate = function() {
  * Registers remove event listeners for triggering
  * on subdocuments.
  *
- * @param {EmbeddedDocument} sub
+ * @param {Subdocument} sub
  * @api private
  */
 
@@ -80904,6 +80984,265 @@ exports.clearImmediate = (typeof self !== "undefined" && self.clearImmediate) ||
 
 /***/ }),
 
+/***/ "./node_modules/uuid/index.js":
+/*!************************************!*\
+  !*** ./node_modules/uuid/index.js ***!
+  \************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+var v1 = __webpack_require__(/*! ./v1 */ "./node_modules/uuid/v1.js");
+var v4 = __webpack_require__(/*! ./v4 */ "./node_modules/uuid/v4.js");
+
+var uuid = v4;
+uuid.v1 = v1;
+uuid.v4 = v4;
+
+module.exports = uuid;
+
+
+/***/ }),
+
+/***/ "./node_modules/uuid/lib/bytesToUuid.js":
+/*!**********************************************!*\
+  !*** ./node_modules/uuid/lib/bytesToUuid.js ***!
+  \**********************************************/
+/*! no static exports found */
+/***/ (function(module, exports) {
+
+/**
+ * Convert array of 16 byte values to UUID string format of the form:
+ * XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
+ */
+var byteToHex = [];
+for (var i = 0; i < 256; ++i) {
+  byteToHex[i] = (i + 0x100).toString(16).substr(1);
+}
+
+function bytesToUuid(buf, offset) {
+  var i = offset || 0;
+  var bth = byteToHex;
+  // join used to fix memory issue caused by concatenation: https://bugs.chromium.org/p/v8/issues/detail?id=3175#c4
+  return ([bth[buf[i++]], bth[buf[i++]], 
+	bth[buf[i++]], bth[buf[i++]], '-',
+	bth[buf[i++]], bth[buf[i++]], '-',
+	bth[buf[i++]], bth[buf[i++]], '-',
+	bth[buf[i++]], bth[buf[i++]], '-',
+	bth[buf[i++]], bth[buf[i++]],
+	bth[buf[i++]], bth[buf[i++]],
+	bth[buf[i++]], bth[buf[i++]]]).join('');
+}
+
+module.exports = bytesToUuid;
+
+
+/***/ }),
+
+/***/ "./node_modules/uuid/lib/rng-browser.js":
+/*!**********************************************!*\
+  !*** ./node_modules/uuid/lib/rng-browser.js ***!
+  \**********************************************/
+/*! no static exports found */
+/***/ (function(module, exports) {
+
+// Unique ID creation requires a high quality random # generator.  In the
+// browser this is a little complicated due to unknown quality of Math.random()
+// and inconsistent support for the `crypto` API.  We do the best we can via
+// feature-detection
+
+// getRandomValues needs to be invoked in a context where "this" is a Crypto
+// implementation. Also, find the complete implementation of crypto on IE11.
+var getRandomValues = (typeof(crypto) != 'undefined' && crypto.getRandomValues && crypto.getRandomValues.bind(crypto)) ||
+                      (typeof(msCrypto) != 'undefined' && typeof window.msCrypto.getRandomValues == 'function' && msCrypto.getRandomValues.bind(msCrypto));
+
+if (getRandomValues) {
+  // WHATWG crypto RNG - http://wiki.whatwg.org/wiki/Crypto
+  var rnds8 = new Uint8Array(16); // eslint-disable-line no-undef
+
+  module.exports = function whatwgRNG() {
+    getRandomValues(rnds8);
+    return rnds8;
+  };
+} else {
+  // Math.random()-based (RNG)
+  //
+  // If all else fails, use Math.random().  It's fast, but is of unspecified
+  // quality.
+  var rnds = new Array(16);
+
+  module.exports = function mathRNG() {
+    for (var i = 0, r; i < 16; i++) {
+      if ((i & 0x03) === 0) r = Math.random() * 0x100000000;
+      rnds[i] = r >>> ((i & 0x03) << 3) & 0xff;
+    }
+
+    return rnds;
+  };
+}
+
+
+/***/ }),
+
+/***/ "./node_modules/uuid/v1.js":
+/*!*********************************!*\
+  !*** ./node_modules/uuid/v1.js ***!
+  \*********************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+var rng = __webpack_require__(/*! ./lib/rng */ "./node_modules/uuid/lib/rng-browser.js");
+var bytesToUuid = __webpack_require__(/*! ./lib/bytesToUuid */ "./node_modules/uuid/lib/bytesToUuid.js");
+
+// **`v1()` - Generate time-based UUID**
+//
+// Inspired by https://github.com/LiosK/UUID.js
+// and http://docs.python.org/library/uuid.html
+
+var _nodeId;
+var _clockseq;
+
+// Previous uuid creation time
+var _lastMSecs = 0;
+var _lastNSecs = 0;
+
+// See https://github.com/broofa/node-uuid for API details
+function v1(options, buf, offset) {
+  var i = buf && offset || 0;
+  var b = buf || [];
+
+  options = options || {};
+  var node = options.node || _nodeId;
+  var clockseq = options.clockseq !== undefined ? options.clockseq : _clockseq;
+
+  // node and clockseq need to be initialized to random values if they're not
+  // specified.  We do this lazily to minimize issues related to insufficient
+  // system entropy.  See #189
+  if (node == null || clockseq == null) {
+    var seedBytes = rng();
+    if (node == null) {
+      // Per 4.5, create and 48-bit node id, (47 random bits + multicast bit = 1)
+      node = _nodeId = [
+        seedBytes[0] | 0x01,
+        seedBytes[1], seedBytes[2], seedBytes[3], seedBytes[4], seedBytes[5]
+      ];
+    }
+    if (clockseq == null) {
+      // Per 4.2.2, randomize (14 bit) clockseq
+      clockseq = _clockseq = (seedBytes[6] << 8 | seedBytes[7]) & 0x3fff;
+    }
+  }
+
+  // UUID timestamps are 100 nano-second units since the Gregorian epoch,
+  // (1582-10-15 00:00).  JSNumbers aren't precise enough for this, so
+  // time is handled internally as 'msecs' (integer milliseconds) and 'nsecs'
+  // (100-nanoseconds offset from msecs) since unix epoch, 1970-01-01 00:00.
+  var msecs = options.msecs !== undefined ? options.msecs : new Date().getTime();
+
+  // Per 4.2.1.2, use count of uuid's generated during the current clock
+  // cycle to simulate higher resolution clock
+  var nsecs = options.nsecs !== undefined ? options.nsecs : _lastNSecs + 1;
+
+  // Time since last uuid creation (in msecs)
+  var dt = (msecs - _lastMSecs) + (nsecs - _lastNSecs)/10000;
+
+  // Per 4.2.1.2, Bump clockseq on clock regression
+  if (dt < 0 && options.clockseq === undefined) {
+    clockseq = clockseq + 1 & 0x3fff;
+  }
+
+  // Reset nsecs if clock regresses (new clockseq) or we've moved onto a new
+  // time interval
+  if ((dt < 0 || msecs > _lastMSecs) && options.nsecs === undefined) {
+    nsecs = 0;
+  }
+
+  // Per 4.2.1.2 Throw error if too many uuids are requested
+  if (nsecs >= 10000) {
+    throw new Error('uuid.v1(): Can\'t create more than 10M uuids/sec');
+  }
+
+  _lastMSecs = msecs;
+  _lastNSecs = nsecs;
+  _clockseq = clockseq;
+
+  // Per 4.1.4 - Convert from unix epoch to Gregorian epoch
+  msecs += 12219292800000;
+
+  // `time_low`
+  var tl = ((msecs & 0xfffffff) * 10000 + nsecs) % 0x100000000;
+  b[i++] = tl >>> 24 & 0xff;
+  b[i++] = tl >>> 16 & 0xff;
+  b[i++] = tl >>> 8 & 0xff;
+  b[i++] = tl & 0xff;
+
+  // `time_mid`
+  var tmh = (msecs / 0x100000000 * 10000) & 0xfffffff;
+  b[i++] = tmh >>> 8 & 0xff;
+  b[i++] = tmh & 0xff;
+
+  // `time_high_and_version`
+  b[i++] = tmh >>> 24 & 0xf | 0x10; // include version
+  b[i++] = tmh >>> 16 & 0xff;
+
+  // `clock_seq_hi_and_reserved` (Per 4.2.2 - include variant)
+  b[i++] = clockseq >>> 8 | 0x80;
+
+  // `clock_seq_low`
+  b[i++] = clockseq & 0xff;
+
+  // `node`
+  for (var n = 0; n < 6; ++n) {
+    b[i + n] = node[n];
+  }
+
+  return buf ? buf : bytesToUuid(b);
+}
+
+module.exports = v1;
+
+
+/***/ }),
+
+/***/ "./node_modules/uuid/v4.js":
+/*!*********************************!*\
+  !*** ./node_modules/uuid/v4.js ***!
+  \*********************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+var rng = __webpack_require__(/*! ./lib/rng */ "./node_modules/uuid/lib/rng-browser.js");
+var bytesToUuid = __webpack_require__(/*! ./lib/bytesToUuid */ "./node_modules/uuid/lib/bytesToUuid.js");
+
+function v4(options, buf, offset) {
+  var i = buf && offset || 0;
+
+  if (typeof(options) == 'string') {
+    buf = options === 'binary' ? new Array(16) : null;
+    options = null;
+  }
+  options = options || {};
+
+  var rnds = options.random || (options.rng || rng)();
+
+  // Per 4.4, set bits for version and `clock_seq_hi_and_reserved`
+  rnds[6] = (rnds[6] & 0x0f) | 0x40;
+  rnds[8] = (rnds[8] & 0x3f) | 0x80;
+
+  // Copy bytes to buffer, if provided
+  if (buf) {
+    for (var ii = 0; ii < 16; ++ii) {
+      buf[i + ii] = rnds[ii];
+    }
+  }
+
+  return buf || bytesToUuid(rnds);
+}
+
+module.exports = v4;
+
+
+/***/ }),
+
 /***/ "./node_modules/webpack/buildin/global.js":
 /*!***********************************!*\
   !*** (webpack)/buildin/global.js ***!
@@ -80970,6 +81309,540 @@ module.exports = function(originalModule) {
 
 /***/ }),
 
+/***/ "./node_modules/whatwg-fetch/fetch.js":
+/*!********************************************!*\
+  !*** ./node_modules/whatwg-fetch/fetch.js ***!
+  \********************************************/
+/*! exports provided: Headers, Request, Response, DOMException, fetch */
+/***/ (function(module, __webpack_exports__, __webpack_require__) {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "Headers", function() { return Headers; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "Request", function() { return Request; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "Response", function() { return Response; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "DOMException", function() { return DOMException; });
+/* harmony export (binding) */ __webpack_require__.d(__webpack_exports__, "fetch", function() { return fetch; });
+var support = {
+  searchParams: 'URLSearchParams' in self,
+  iterable: 'Symbol' in self && 'iterator' in Symbol,
+  blob:
+    'FileReader' in self &&
+    'Blob' in self &&
+    (function() {
+      try {
+        new Blob()
+        return true
+      } catch (e) {
+        return false
+      }
+    })(),
+  formData: 'FormData' in self,
+  arrayBuffer: 'ArrayBuffer' in self
+}
+
+function isDataView(obj) {
+  return obj && DataView.prototype.isPrototypeOf(obj)
+}
+
+if (support.arrayBuffer) {
+  var viewClasses = [
+    '[object Int8Array]',
+    '[object Uint8Array]',
+    '[object Uint8ClampedArray]',
+    '[object Int16Array]',
+    '[object Uint16Array]',
+    '[object Int32Array]',
+    '[object Uint32Array]',
+    '[object Float32Array]',
+    '[object Float64Array]'
+  ]
+
+  var isArrayBufferView =
+    ArrayBuffer.isView ||
+    function(obj) {
+      return obj && viewClasses.indexOf(Object.prototype.toString.call(obj)) > -1
+    }
+}
+
+function normalizeName(name) {
+  if (typeof name !== 'string') {
+    name = String(name)
+  }
+  if (/[^a-z0-9\-#$%&'*+.^_`|~]/i.test(name)) {
+    throw new TypeError('Invalid character in header field name')
+  }
+  return name.toLowerCase()
+}
+
+function normalizeValue(value) {
+  if (typeof value !== 'string') {
+    value = String(value)
+  }
+  return value
+}
+
+// Build a destructive iterator for the value list
+function iteratorFor(items) {
+  var iterator = {
+    next: function() {
+      var value = items.shift()
+      return {done: value === undefined, value: value}
+    }
+  }
+
+  if (support.iterable) {
+    iterator[Symbol.iterator] = function() {
+      return iterator
+    }
+  }
+
+  return iterator
+}
+
+function Headers(headers) {
+  this.map = {}
+
+  if (headers instanceof Headers) {
+    headers.forEach(function(value, name) {
+      this.append(name, value)
+    }, this)
+  } else if (Array.isArray(headers)) {
+    headers.forEach(function(header) {
+      this.append(header[0], header[1])
+    }, this)
+  } else if (headers) {
+    Object.getOwnPropertyNames(headers).forEach(function(name) {
+      this.append(name, headers[name])
+    }, this)
+  }
+}
+
+Headers.prototype.append = function(name, value) {
+  name = normalizeName(name)
+  value = normalizeValue(value)
+  var oldValue = this.map[name]
+  this.map[name] = oldValue ? oldValue + ', ' + value : value
+}
+
+Headers.prototype['delete'] = function(name) {
+  delete this.map[normalizeName(name)]
+}
+
+Headers.prototype.get = function(name) {
+  name = normalizeName(name)
+  return this.has(name) ? this.map[name] : null
+}
+
+Headers.prototype.has = function(name) {
+  return this.map.hasOwnProperty(normalizeName(name))
+}
+
+Headers.prototype.set = function(name, value) {
+  this.map[normalizeName(name)] = normalizeValue(value)
+}
+
+Headers.prototype.forEach = function(callback, thisArg) {
+  for (var name in this.map) {
+    if (this.map.hasOwnProperty(name)) {
+      callback.call(thisArg, this.map[name], name, this)
+    }
+  }
+}
+
+Headers.prototype.keys = function() {
+  var items = []
+  this.forEach(function(value, name) {
+    items.push(name)
+  })
+  return iteratorFor(items)
+}
+
+Headers.prototype.values = function() {
+  var items = []
+  this.forEach(function(value) {
+    items.push(value)
+  })
+  return iteratorFor(items)
+}
+
+Headers.prototype.entries = function() {
+  var items = []
+  this.forEach(function(value, name) {
+    items.push([name, value])
+  })
+  return iteratorFor(items)
+}
+
+if (support.iterable) {
+  Headers.prototype[Symbol.iterator] = Headers.prototype.entries
+}
+
+function consumed(body) {
+  if (body.bodyUsed) {
+    return Promise.reject(new TypeError('Already read'))
+  }
+  body.bodyUsed = true
+}
+
+function fileReaderReady(reader) {
+  return new Promise(function(resolve, reject) {
+    reader.onload = function() {
+      resolve(reader.result)
+    }
+    reader.onerror = function() {
+      reject(reader.error)
+    }
+  })
+}
+
+function readBlobAsArrayBuffer(blob) {
+  var reader = new FileReader()
+  var promise = fileReaderReady(reader)
+  reader.readAsArrayBuffer(blob)
+  return promise
+}
+
+function readBlobAsText(blob) {
+  var reader = new FileReader()
+  var promise = fileReaderReady(reader)
+  reader.readAsText(blob)
+  return promise
+}
+
+function readArrayBufferAsText(buf) {
+  var view = new Uint8Array(buf)
+  var chars = new Array(view.length)
+
+  for (var i = 0; i < view.length; i++) {
+    chars[i] = String.fromCharCode(view[i])
+  }
+  return chars.join('')
+}
+
+function bufferClone(buf) {
+  if (buf.slice) {
+    return buf.slice(0)
+  } else {
+    var view = new Uint8Array(buf.byteLength)
+    view.set(new Uint8Array(buf))
+    return view.buffer
+  }
+}
+
+function Body() {
+  this.bodyUsed = false
+
+  this._initBody = function(body) {
+    this._bodyInit = body
+    if (!body) {
+      this._bodyText = ''
+    } else if (typeof body === 'string') {
+      this._bodyText = body
+    } else if (support.blob && Blob.prototype.isPrototypeOf(body)) {
+      this._bodyBlob = body
+    } else if (support.formData && FormData.prototype.isPrototypeOf(body)) {
+      this._bodyFormData = body
+    } else if (support.searchParams && URLSearchParams.prototype.isPrototypeOf(body)) {
+      this._bodyText = body.toString()
+    } else if (support.arrayBuffer && support.blob && isDataView(body)) {
+      this._bodyArrayBuffer = bufferClone(body.buffer)
+      // IE 10-11 can't handle a DataView body.
+      this._bodyInit = new Blob([this._bodyArrayBuffer])
+    } else if (support.arrayBuffer && (ArrayBuffer.prototype.isPrototypeOf(body) || isArrayBufferView(body))) {
+      this._bodyArrayBuffer = bufferClone(body)
+    } else {
+      this._bodyText = body = Object.prototype.toString.call(body)
+    }
+
+    if (!this.headers.get('content-type')) {
+      if (typeof body === 'string') {
+        this.headers.set('content-type', 'text/plain;charset=UTF-8')
+      } else if (this._bodyBlob && this._bodyBlob.type) {
+        this.headers.set('content-type', this._bodyBlob.type)
+      } else if (support.searchParams && URLSearchParams.prototype.isPrototypeOf(body)) {
+        this.headers.set('content-type', 'application/x-www-form-urlencoded;charset=UTF-8')
+      }
+    }
+  }
+
+  if (support.blob) {
+    this.blob = function() {
+      var rejected = consumed(this)
+      if (rejected) {
+        return rejected
+      }
+
+      if (this._bodyBlob) {
+        return Promise.resolve(this._bodyBlob)
+      } else if (this._bodyArrayBuffer) {
+        return Promise.resolve(new Blob([this._bodyArrayBuffer]))
+      } else if (this._bodyFormData) {
+        throw new Error('could not read FormData body as blob')
+      } else {
+        return Promise.resolve(new Blob([this._bodyText]))
+      }
+    }
+
+    this.arrayBuffer = function() {
+      if (this._bodyArrayBuffer) {
+        return consumed(this) || Promise.resolve(this._bodyArrayBuffer)
+      } else {
+        return this.blob().then(readBlobAsArrayBuffer)
+      }
+    }
+  }
+
+  this.text = function() {
+    var rejected = consumed(this)
+    if (rejected) {
+      return rejected
+    }
+
+    if (this._bodyBlob) {
+      return readBlobAsText(this._bodyBlob)
+    } else if (this._bodyArrayBuffer) {
+      return Promise.resolve(readArrayBufferAsText(this._bodyArrayBuffer))
+    } else if (this._bodyFormData) {
+      throw new Error('could not read FormData body as text')
+    } else {
+      return Promise.resolve(this._bodyText)
+    }
+  }
+
+  if (support.formData) {
+    this.formData = function() {
+      return this.text().then(decode)
+    }
+  }
+
+  this.json = function() {
+    return this.text().then(JSON.parse)
+  }
+
+  return this
+}
+
+// HTTP methods whose capitalization should be normalized
+var methods = ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'POST', 'PUT']
+
+function normalizeMethod(method) {
+  var upcased = method.toUpperCase()
+  return methods.indexOf(upcased) > -1 ? upcased : method
+}
+
+function Request(input, options) {
+  options = options || {}
+  var body = options.body
+
+  if (input instanceof Request) {
+    if (input.bodyUsed) {
+      throw new TypeError('Already read')
+    }
+    this.url = input.url
+    this.credentials = input.credentials
+    if (!options.headers) {
+      this.headers = new Headers(input.headers)
+    }
+    this.method = input.method
+    this.mode = input.mode
+    this.signal = input.signal
+    if (!body && input._bodyInit != null) {
+      body = input._bodyInit
+      input.bodyUsed = true
+    }
+  } else {
+    this.url = String(input)
+  }
+
+  this.credentials = options.credentials || this.credentials || 'same-origin'
+  if (options.headers || !this.headers) {
+    this.headers = new Headers(options.headers)
+  }
+  this.method = normalizeMethod(options.method || this.method || 'GET')
+  this.mode = options.mode || this.mode || null
+  this.signal = options.signal || this.signal
+  this.referrer = null
+
+  if ((this.method === 'GET' || this.method === 'HEAD') && body) {
+    throw new TypeError('Body not allowed for GET or HEAD requests')
+  }
+  this._initBody(body)
+}
+
+Request.prototype.clone = function() {
+  return new Request(this, {body: this._bodyInit})
+}
+
+function decode(body) {
+  var form = new FormData()
+  body
+    .trim()
+    .split('&')
+    .forEach(function(bytes) {
+      if (bytes) {
+        var split = bytes.split('=')
+        var name = split.shift().replace(/\+/g, ' ')
+        var value = split.join('=').replace(/\+/g, ' ')
+        form.append(decodeURIComponent(name), decodeURIComponent(value))
+      }
+    })
+  return form
+}
+
+function parseHeaders(rawHeaders) {
+  var headers = new Headers()
+  // Replace instances of \r\n and \n followed by at least one space or horizontal tab with a space
+  // https://tools.ietf.org/html/rfc7230#section-3.2
+  var preProcessedHeaders = rawHeaders.replace(/\r?\n[\t ]+/g, ' ')
+  preProcessedHeaders.split(/\r?\n/).forEach(function(line) {
+    var parts = line.split(':')
+    var key = parts.shift().trim()
+    if (key) {
+      var value = parts.join(':').trim()
+      headers.append(key, value)
+    }
+  })
+  return headers
+}
+
+Body.call(Request.prototype)
+
+function Response(bodyInit, options) {
+  if (!options) {
+    options = {}
+  }
+
+  this.type = 'default'
+  this.status = options.status === undefined ? 200 : options.status
+  this.ok = this.status >= 200 && this.status < 300
+  this.statusText = 'statusText' in options ? options.statusText : 'OK'
+  this.headers = new Headers(options.headers)
+  this.url = options.url || ''
+  this._initBody(bodyInit)
+}
+
+Body.call(Response.prototype)
+
+Response.prototype.clone = function() {
+  return new Response(this._bodyInit, {
+    status: this.status,
+    statusText: this.statusText,
+    headers: new Headers(this.headers),
+    url: this.url
+  })
+}
+
+Response.error = function() {
+  var response = new Response(null, {status: 0, statusText: ''})
+  response.type = 'error'
+  return response
+}
+
+var redirectStatuses = [301, 302, 303, 307, 308]
+
+Response.redirect = function(url, status) {
+  if (redirectStatuses.indexOf(status) === -1) {
+    throw new RangeError('Invalid status code')
+  }
+
+  return new Response(null, {status: status, headers: {location: url}})
+}
+
+var DOMException = self.DOMException
+try {
+  new DOMException()
+} catch (err) {
+  DOMException = function(message, name) {
+    this.message = message
+    this.name = name
+    var error = Error(message)
+    this.stack = error.stack
+  }
+  DOMException.prototype = Object.create(Error.prototype)
+  DOMException.prototype.constructor = DOMException
+}
+
+function fetch(input, init) {
+  return new Promise(function(resolve, reject) {
+    var request = new Request(input, init)
+
+    if (request.signal && request.signal.aborted) {
+      return reject(new DOMException('Aborted', 'AbortError'))
+    }
+
+    var xhr = new XMLHttpRequest()
+
+    function abortXhr() {
+      xhr.abort()
+    }
+
+    xhr.onload = function() {
+      var options = {
+        status: xhr.status,
+        statusText: xhr.statusText,
+        headers: parseHeaders(xhr.getAllResponseHeaders() || '')
+      }
+      options.url = 'responseURL' in xhr ? xhr.responseURL : options.headers.get('X-Request-URL')
+      var body = 'response' in xhr ? xhr.response : xhr.responseText
+      resolve(new Response(body, options))
+    }
+
+    xhr.onerror = function() {
+      reject(new TypeError('Network request failed'))
+    }
+
+    xhr.ontimeout = function() {
+      reject(new TypeError('Network request failed'))
+    }
+
+    xhr.onabort = function() {
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+
+    xhr.open(request.method, request.url, true)
+
+    if (request.credentials === 'include') {
+      xhr.withCredentials = true
+    } else if (request.credentials === 'omit') {
+      xhr.withCredentials = false
+    }
+
+    if ('responseType' in xhr && support.blob) {
+      xhr.responseType = 'blob'
+    }
+
+    request.headers.forEach(function(value, name) {
+      xhr.setRequestHeader(name, value)
+    })
+
+    if (request.signal) {
+      request.signal.addEventListener('abort', abortXhr)
+
+      xhr.onreadystatechange = function() {
+        // DONE (success or failure)
+        if (xhr.readyState === 4) {
+          request.signal.removeEventListener('abort', abortXhr)
+        }
+      }
+    }
+
+    xhr.send(typeof request._bodyInit === 'undefined' ? null : request._bodyInit)
+  })
+}
+
+fetch.polyfill = true
+
+if (!self.fetch) {
+  self.fetch = fetch
+  self.Headers = Headers
+  self.Request = Request
+  self.Response = Response
+}
+
+
+/***/ }),
+
 /***/ "./src/database/clear-set.js":
 /*!***********************************!*\
   !*** ./src/database/clear-set.js ***!
@@ -81002,13 +81875,10 @@ var delAndSetState = function () {
             while (1) {
                 switch (_context.prev = _context.next) {
                     case 0:
-                        _context.next = 2;
-                        return (0, _deleter2.default)(reserveModel, dishModel);
-
-                    case 2:
+                        //await deleteState(reserveModel, dishModel)
                         (0, _seter2.default)(obj, reserveModel, dishModel);
 
-                    case 3:
+                    case 1:
                     case 'end':
                         return _context.stop();
                 }
@@ -81123,17 +81993,19 @@ var _mongoose2 = _interopRequireDefault(_mongoose);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-var dishShema = new _mongoose2.default.Schema({
+var dishShema = new _mongoose2.default.Schema([{
+    _id: String,
     name: String,
     smallDescription: String,
     fullDescription: String,
     recipes: [{
+        _id: String,
         ingredient: String,
-        amount: Number,
+        amount: String,
         unit: String
     }],
     urlOfImage: String
-}, {
+}], {
     versionKey: false
 });
 
@@ -81163,18 +82035,20 @@ var _mongoose2 = _interopRequireDefault(_mongoose);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-var reserveShema = new _mongoose2.default.Schema({
+var reserveShema = new _mongoose2.default.Schema([{
+    _id: String,
     eventDate: String,
     eventTime: String,
-    quantity: Number,
+    quantity: String,
     visitors: [{
+        _id: String,
         firstName: String,
         lastName: String
     }],
     phone: String,
     email: String,
     status: String
-}, {
+}], {
     versionKey: false
 });
 
@@ -81222,6 +82096,8 @@ var setState = function setState(obj, reserveModel, dishModel) {
         new model(objOne).save(function (err) {
             if (err) {
                 return console.error(err);
+            } else {
+                console.log('saved');
             }
         });
     };
@@ -81235,58 +82111,6 @@ var setState = function setState(obj, reserveModel, dishModel) {
 };
 
 exports.default = setState;
-
-/***/ }),
-
-/***/ "./src/database/testDate.js":
-/*!**********************************!*\
-  !*** ./src/database/testDate.js ***!
-  \**********************************/
-/*! no static exports found */
-/***/ (function(module, exports, __webpack_require__) {
-
-"use strict";
-
-
-Object.defineProperty(exports, "__esModule", {
-    value: true
-});
-var date = {
-    "reserves": [{
-        "id": "420nfi08",
-        "eventDate": "27.03.98",
-        "eventTime": "18.00",
-        "quantity": 1,
-        "visitors": [{ "id": "4930u8rjt7u8i8fh3", "firstName": "Чалов", "lastName": "Даниил" }],
-        "phone": 89518710640,
-        "email": "gimbarrkik2@gmail.com",
-        "status": "yes"
-    }, {
-        "id": "420nfi08",
-        "eventDate": "26.03.98",
-        "eventTime": "18.00",
-        "quantity": 1,
-        "visitors": [{ "id": "4930u8rjt7u8i8fh3", "firstName": "Члов", "lastName": "Даниил" }],
-        "phone": 89518710640,
-        "email": "gimbarrkik2@mail.com",
-        "status": "yes"
-    }],
-    "dishes": [{
-        "id": "4930u8rfh3",
-        "name": "Шаурма",
-        "smallDescription": "Вкусная и дешёвая шавуха",
-        "fullDescription": "Блюдо отлично утоляет голод. Очень вкусное, но вохножны отравления)",
-        "recipes": [{
-            "id": "49gdh0u8rfh3",
-            "ingredient": "лаваш",
-            "amount": 1,
-            "unit": "экземпляр"
-        }, { "id": "4930bgffdrfh3", "ingredient": "мясо курицы", "amount": 200, "unit": "грамм" }],
-        "urlOfImage": "someString"
-    }]
-};
-
-exports.default = date;
 
 /***/ }),
 
@@ -81308,17 +82132,62 @@ var _react = __webpack_require__(/*! react */ "./node_modules/react/index.js");
 
 var _react2 = _interopRequireDefault(_react);
 
+var _form = __webpack_require__(/*! ./form */ "./src/frontend/user-reserve/form.js");
+
+var _form2 = _interopRequireDefault(_form);
+
+var _navigation = __webpack_require__(/*! ./navigation */ "./src/frontend/user-reserve/navigation.js");
+
+var _navigation2 = _interopRequireDefault(_navigation);
+
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
 var App = function App(props) {
     return _react2.default.createElement(
-        'h1',
-        null,
-        'User info phgggfage'
+        'div',
+        { className: 'app' },
+        _react2.default.createElement(_navigation2.default, null),
+        _react2.default.createElement(_form2.default, null)
     );
 };
 
 exports.default = App;
+
+/***/ }),
+
+/***/ "./src/frontend/user-reserve/form.js":
+/*!*******************************************!*\
+  !*** ./src/frontend/user-reserve/form.js ***!
+  \*******************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+    value: true
+});
+
+var _reactRedux = __webpack_require__(/*! react-redux */ "./node_modules/react-redux/es/index.js");
+
+var _reserveForm = __webpack_require__(/*! ./reserveForm */ "./src/frontend/user-reserve/reserveForm.js");
+
+var _reserveForm2 = _interopRequireDefault(_reserveForm);
+
+var _clientActionMaker = __webpack_require__(/*! ../../redux-storage/client-action-maker */ "./src/redux-storage/client-action-maker.js");
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+var Form = (0, _reactRedux.connect)(null, function (dispatch) {
+    return {
+        addReserve: function addReserve(eventDate, eventTime, quantity, visitors, phone, email) {
+            return dispatch((0, _clientActionMaker.addReserve)('/reserve')(eventDate, eventTime, quantity, visitors, phone, email));
+        }
+    };
+})(_reserveForm2.default);
+
+exports.default = Form;
 
 /***/ }),
 
@@ -81350,22 +82219,536 @@ var _app = __webpack_require__(/*! ./app.js */ "./src/frontend/user-reserve/app.
 
 var _app2 = _interopRequireDefault(_app);
 
-var _testDate = __webpack_require__(/*! ../../database/testDate */ "./src/database/testDate.js");
+var _clientInitialStateGeter = __webpack_require__(/*! ../../redux-storage/client-initial-state-geter */ "./src/redux-storage/client-initial-state-geter.js");
 
-var _testDate2 = _interopRequireDefault(_testDate);
+var _clientInitialStateGeter2 = _interopRequireDefault(_clientInitialStateGeter);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
 window.React = _react2.default;
 
-var store = (0, _storeFactory2.default)(false, _testDate2.default);
-console.log(store.getState());
+var callback = function callback(initialState) {
+    var store = (0, _storeFactory2.default)(false, initialState);
 
-(0, _reactDom.render)(_react2.default.createElement(
-    _reactRedux.Provider,
-    { store: store },
-    _react2.default.createElement(_app2.default, null)
-), document.getElementById("react-container"));
+    console.log(store.getState());
+
+    (0, _reactDom.render)(_react2.default.createElement(
+        _reactRedux.Provider,
+        { store: store },
+        _react2.default.createElement(_app2.default, null)
+    ), document.getElementById("react-container"));
+};
+
+(0, _clientInitialStateGeter2.default)('/initialState', callback);
+
+/***/ }),
+
+/***/ "./src/frontend/user-reserve/navigation.js":
+/*!*************************************************!*\
+  !*** ./src/frontend/user-reserve/navigation.js ***!
+  \*************************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+    value: true
+});
+
+var _react = __webpack_require__(/*! react */ "./node_modules/react/index.js");
+
+var _react2 = _interopRequireDefault(_react);
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+var Navigation = function Navigation(props) {
+    return _react2.default.createElement(
+        "nav",
+        null,
+        _react2.default.createElement(
+            "a",
+            { href: "info" },
+            " \u0418\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u044F \u043E \u0440\u0435\u0441\u0442\u043E\u0440\u0430\u043D\u0435 "
+        ),
+        "|",
+        _react2.default.createElement(
+            "a",
+            { href: "reserve" },
+            " \u0417\u0430\u043A\u0430\u0437 \u0441\u0442\u043E\u043B\u043E\u0432 "
+        ),
+        "|",
+        _react2.default.createElement(
+            "a",
+            { href: "dish" },
+            " \u041C\u0435\u043D\u044E "
+        ),
+        "|",
+        _react2.default.createElement(
+            "a",
+            { href: "admin" },
+            " \u0412\u0445\u043E\u0434"
+        )
+    );
+};
+
+exports.default = Navigation;
+
+/***/ }),
+
+/***/ "./src/frontend/user-reserve/reserveForm.js":
+/*!**************************************************!*\
+  !*** ./src/frontend/user-reserve/reserveForm.js ***!
+  \**************************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+    value: true
+});
+
+var _createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
+
+var _react = __webpack_require__(/*! react */ "./node_modules/react/index.js");
+
+var _react2 = _interopRequireDefault(_react);
+
+var _propTypes = __webpack_require__(/*! prop-types */ "./node_modules/prop-types/index.js");
+
+var _propTypes2 = _interopRequireDefault(_propTypes);
+
+var _uuid = __webpack_require__(/*! uuid */ "./node_modules/uuid/index.js");
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function _defineProperty(obj, key, value) { if (key in obj) { Object.defineProperty(obj, key, { value: value, enumerable: true, configurable: true, writable: true }); } else { obj[key] = value; } return obj; }
+
+function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
+
+function _possibleConstructorReturn(self, call) { if (!self) { throw new ReferenceError("this hasn't been initialised - super() hasn't been called"); } return call && (typeof call === "object" || typeof call === "function") ? call : self; }
+
+function _inherits(subClass, superClass) { if (typeof superClass !== "function" && superClass !== null) { throw new TypeError("Super expression must either be null or a function, not " + typeof superClass); } subClass.prototype = Object.create(superClass && superClass.prototype, { constructor: { value: subClass, enumerable: false, writable: true, configurable: true } }); if (superClass) Object.setPrototypeOf ? Object.setPrototypeOf(subClass, superClass) : subClass.__proto__ = superClass; }
+
+var ReserveForm = function (_React$Component) {
+    _inherits(ReserveForm, _React$Component);
+
+    function ReserveForm(props) {
+        _classCallCheck(this, ReserveForm);
+
+        var _this = _possibleConstructorReturn(this, (ReserveForm.__proto__ || Object.getPrototypeOf(ReserveForm)).call(this, props));
+
+        _this.state = {
+            eventDate: '',
+            eventTime: '',
+            quantity: '',
+            visitors: [],
+            phone: '',
+            email: ''
+        };
+
+        _this.submit = _this.submit.bind(_this);
+        _this.simpleInputChange = _this.simpleInputChange.bind(_this);
+        _this.quantityInputChange = _this.quantityInputChange.bind(_this);
+        _this.visitorInputChange = _this.visitorInputChange.bind(_this);
+        return _this;
+    }
+
+    _createClass(ReserveForm, [{
+        key: 'submit',
+        value: function submit(event) {
+            var _state = this.state,
+                eventDate = _state.eventDate,
+                eventTime = _state.eventTime,
+                quantity = _state.quantity,
+                visitors = _state.visitors,
+                phone = _state.phone,
+                email = _state.email;
+            var addReserve = this.props.addReserve;
+
+
+            event.preventDefault();
+            addReserve(eventDate, eventTime, quantity, visitors, phone, email);
+            window.alert('Ваша заявка принята, ожидайте ответа.');
+            this.setState({
+                eventDate: '',
+                eventTime: '',
+                quantity: '',
+                visitors: [],
+                phone: '',
+                email: ''
+            });
+        }
+    }, {
+        key: 'simpleInputChange',
+        value: function simpleInputChange(event) {
+            var name = event.target.name;
+            var value = event.target.value;
+
+            this.setState(_defineProperty({}, name, value));
+        }
+    }, {
+        key: 'quantityInputChange',
+        value: function quantityInputChange(event) {
+            var _setState2;
+
+            var name = event.target.name;
+            var value = event.target.value;
+
+            var visitors = [];
+
+            for (var i = 0; i < value; i++) {
+                visitors.push({
+                    _id: (0, _uuid.v4)(),
+                    firstName: '',
+                    lastName: ''
+                });
+            }
+
+            this.setState((_setState2 = {}, _defineProperty(_setState2, name, value), _defineProperty(_setState2, 'visitors', visitors), _setState2));
+        }
+    }, {
+        key: 'visitorInputChange',
+        value: function visitorInputChange(event) {
+            var name = event.target.name;
+            var value = event.target.value;
+
+            var idSelector = function idSelector(id) {
+                return function (obj) {
+                    return obj._id === id;
+                };
+            };
+
+            if (~name.indexOf('firstName')) {
+                var _id = name.substring('firstName'.length);
+                var index = this.state.visitors.findIndex(idSelector(_id));
+                var newVisitors = this.state.visitors.map(function (visitor, i) {
+                    if (i === index) {
+                        return {
+                            _id: visitor._id,
+                            firstName: value,
+                            lastName: visitor.lastName
+                        };
+                    } else {
+                        return visitor;
+                    }
+                });
+
+                this.setState({ visitors: newVisitors });
+            }
+
+            if (~name.indexOf('lastName')) {
+                var _id2 = name.substring('lastName'.length);
+                var _index = this.state.visitors.findIndex(idSelector(_id2));
+                var _newVisitors = this.state.visitors.map(function (visitor, i) {
+                    if (i === _index) {
+                        return {
+                            _id: visitor._id,
+                            firstName: visitor.firstName,
+                            lastName: value
+                        };
+                    } else {
+                        return visitor;
+                    }
+                });
+
+                this.setState({ visitors: _newVisitors });
+            }
+        }
+    }, {
+        key: 'render',
+        value: function render() {
+            var _this2 = this;
+
+            return _react2.default.createElement(
+                'form',
+                { onSubmit: this.submit },
+                _react2.default.createElement(
+                    'fieldset',
+                    null,
+                    _react2.default.createElement(
+                        'legend',
+                        null,
+                        '\u0417\u0430\u043F\u043E\u043B\u043D\u0438\u0442\u0435 \u0444\u043E\u0440\u043C\u0443 \u0431\u0440\u043E\u043D\u0438\u0440\u043E\u0432\u0430\u043D\u0438\u044F'
+                    ),
+                    _react2.default.createElement(
+                        'p',
+                        null,
+                        _react2.default.createElement(
+                            'label',
+                            null,
+                            '\u0414\u0430\u0442\u0430 \u043F\u043E\u0441\u0435\u0449\u0435\u043D\u0438\u044F \u0440\u0435\u0441\u0442\u043E\u0440\u0430\u043D\u0430:',
+                            _react2.default.createElement('input', {
+                                name: 'eventDate',
+                                type: 'text',
+                                placeholder: '\u0434\u0434.\u043C\u043C.\u0433\u0433',
+                                value: this.state.eventDate,
+                                onChange: this.simpleInputChange,
+                                required: true
+                            })
+                        )
+                    ),
+                    _react2.default.createElement(
+                        'p',
+                        null,
+                        _react2.default.createElement(
+                            'label',
+                            null,
+                            '\u0412\u0440\u0435\u043C\u044F \u043F\u043E\u0441\u0435\u0449\u0435\u043D\u0438\u044F \u0440\u0435\u0441\u0442\u043E\u0440\u0430\u043D\u0430:',
+                            _react2.default.createElement('input', {
+                                name: 'eventTime',
+                                type: 'text',
+                                placeholder: '\u0447\u0447.\u043C\u043C',
+                                value: this.state.eventTime,
+                                onChange: this.simpleInputChange,
+                                required: true
+                            })
+                        )
+                    ),
+                    _react2.default.createElement(
+                        'p',
+                        null,
+                        _react2.default.createElement(
+                            'label',
+                            null,
+                            '\u041A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u0433\u043E\u0441\u0442\u0435\u0439:',
+                            _react2.default.createElement('input', {
+                                name: 'quantity',
+                                type: 'text',
+                                value: this.state.quantity,
+                                onChange: this.quantityInputChange,
+                                required: true
+                            })
+                        )
+                    ),
+                    this.state.visitors.map(function (client, index) {
+                        return _react2.default.createElement(
+                            'div',
+                            { key: client._id, className: 'visitor' + index },
+                            _react2.default.createElement(
+                                'fieldset',
+                                null,
+                                _react2.default.createElement(
+                                    'legend',
+                                    null,
+                                    '\u0418\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u044F \u043E \u0433\u043E\u0441\u0442\u0435'
+                                ),
+                                _react2.default.createElement(
+                                    'p',
+                                    null,
+                                    _react2.default.createElement(
+                                        'label',
+                                        null,
+                                        '\u0418\u043C\u044F:',
+                                        _react2.default.createElement('input', {
+                                            name: 'firstName' + client._id,
+                                            type: 'text',
+                                            value: _this2.state.visitors[index].firstName,
+                                            onChange: _this2.visitorInputChange,
+                                            required: true
+                                        })
+                                    )
+                                ),
+                                _react2.default.createElement(
+                                    'p',
+                                    null,
+                                    _react2.default.createElement(
+                                        'label',
+                                        null,
+                                        '\u0424\u0430\u043C\u0438\u043B\u0438\u044F:',
+                                        _react2.default.createElement('input', {
+                                            name: 'lastName' + client._id,
+                                            type: 'text',
+                                            value: _this2.state.visitors[index].lastName,
+                                            onChange: _this2.visitorInputChange,
+                                            required: true
+                                        })
+                                    )
+                                )
+                            )
+                        );
+                    }),
+                    _react2.default.createElement(
+                        'p',
+                        null,
+                        _react2.default.createElement(
+                            'label',
+                            null,
+                            '\u041A\u043E\u043D\u0442\u0430\u043A\u0442\u043D\u044B\u0439 \u0442\u0435\u043B\u0435\u0444\u043E\u043D:',
+                            _react2.default.createElement('input', {
+                                name: 'phone',
+                                type: 'text',
+                                placeholder: '8 xxx xxx xx xx',
+                                value: this.state.phone,
+                                onChange: this.simpleInputChange,
+                                required: true
+                            })
+                        )
+                    ),
+                    _react2.default.createElement(
+                        'p',
+                        null,
+                        _react2.default.createElement(
+                            'label',
+                            null,
+                            'e-mail:',
+                            _react2.default.createElement('input', {
+                                name: 'email',
+                                type: 'email',
+                                placeholder: 'user@server',
+                                value: this.state.email,
+                                onChange: this.simpleInputChange,
+                                required: true
+                            })
+                        )
+                    ),
+                    _react2.default.createElement(
+                        'button',
+                        null,
+                        '\u041E\u0442\u043F\u0440\u0430\u0432\u0438\u0442\u044C \u0437\u0430\u044F\u0432\u043A\u0443'
+                    )
+                )
+            );
+        }
+    }]);
+
+    return ReserveForm;
+}(_react2.default.Component);
+
+ReserveForm.propTypes = {
+    addReserve: _propTypes2.default.func
+};
+ReserveForm.defaultProps = {
+    addReserve: function addReserve(f) {
+        return f;
+    }
+};
+exports.default = ReserveForm;
+
+/***/ }),
+
+/***/ "./src/redux-storage/client-action-maker.js":
+/*!**************************************************!*\
+  !*** ./src/redux-storage/client-action-maker.js ***!
+  \**************************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+    value: true
+});
+exports.rateDish = exports.addDish = exports.rateReserve = exports.addReserve = undefined;
+
+var _isomorphicFetch = __webpack_require__(/*! isomorphic-fetch */ "./node_modules/isomorphic-fetch/fetch-npm-browserify.js");
+
+var _isomorphicFetch2 = _interopRequireDefault(_isomorphicFetch);
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+var parseResponse = function parseResponse(response) {
+    console.log('json принят');
+    return response.json();
+};
+var logError = function logError(error) {
+    return console.error(error);
+};
+
+var fetchThenDispatch = function fetchThenDispatch(dispatch, url, method, body) {
+    (0, _isomorphicFetch2.default)(url, {
+        method: method,
+        body: body,
+        headers: { 'Content-Type': 'application/json' }
+    }).then(parseResponse).then(dispatch).catch(logError);
+};
+
+var addReserve = exports.addReserve = function addReserve(url) {
+    return function (eventDate, eventTime, quantity, visitors, phone, email) {
+        return function (dispatch) {
+            var body = { eventDate: eventDate, eventTime: eventTime, quantity: quantity, visitors: visitors, phone: phone, email: email };
+
+            console.log(body);
+            fetchThenDispatch(dispatch, url, 'POST', JSON.stringify(body));
+        };
+    };
+};
+
+var rateReserve = exports.rateReserve = function rateReserve(url) {
+    return function (_id, status) {
+        return function (dispatch) {
+            var body = { _id: _id, status: status };
+
+            console.log(body);
+            fetchThenDispatch(dispatch, url, 'PUT', JSON.stringify(body));
+        };
+    };
+};
+
+var addDish = exports.addDish = function addDish(url) {
+    return function (name, smallDescription, fullDescription, recipes, urlOfImage) {
+        return function (dispatch) {
+            var body = { name: name, smallDescription: smallDescription, fullDescription: fullDescription, recipes: recipes, urlOfImage: urlOfImage };
+
+            console.log(body);
+            fetchThenDispatch(dispatch, url, 'POST', JSON.stringify(body));
+        };
+    };
+};
+
+var rateDish = exports.rateDish = function rateDish(url) {
+    return function (_id, name, smallDescription, fullDescription, recipes, urlOfImage) {
+        return function (dispatch) {
+            var body = { _id: _id, name: name, smallDescription: smallDescription, fullDescription: fullDescription, recipes: recipes, urlOfImage: urlOfImage };
+
+            console.log(body);
+            fetchThenDispatch(dispatch, url, 'PUT', JSON.stringify(body));
+        };
+    };
+};
+
+/***/ }),
+
+/***/ "./src/redux-storage/client-initial-state-geter.js":
+/*!*********************************************************!*\
+  !*** ./src/redux-storage/client-initial-state-geter.js ***!
+  \*********************************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+    value: true
+});
+
+var _isomorphicFetch = __webpack_require__(/*! isomorphic-fetch */ "./node_modules/isomorphic-fetch/fetch-npm-browserify.js");
+
+var _isomorphicFetch2 = _interopRequireDefault(_isomorphicFetch);
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+var parseResponse = function parseResponse(response) {
+    return response.json();
+};
+var logError = function logError(error) {
+    return console.error(error);
+};
+
+var initialStateGeter = function initialStateGeter(url, callback) {
+    console.log("i'm sending");
+    (0, _isomorphicFetch2.default)(url, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' }
+    }).then(parseResponse).then(callback).catch(logError);
+};
+
+exports.default = initialStateGeter;
 
 /***/ }),
 
@@ -81466,7 +82849,7 @@ var reserve = function reserve() {
         case _constants2.default.ADD_RESERV:
             console.log('here');
             return {
-                id: action._id,
+                _id: action._id,
                 eventDate: action.eventDate,
                 eventTime: action.eventTime,
                 quantity: action.quantity,
@@ -81499,7 +82882,7 @@ var dish = function dish() {
             });
         case _constants2.default.ADD_DISH:
             return {
-                id: action._id,
+                _id: action._id,
                 name: action.name,
                 smallDescription: action.smallDescription,
                 fullDescription: action.fullDescription,
@@ -81620,7 +83003,7 @@ var clientLogger = function clientLogger(store) {
     return function (next) {
         return function (action) {
             var result = void 0;
-            console.groupCollapsed("dispatching", action.type);
+            console.groupCollapsed("dispatching", 'some');
             console.log('prev state', store.getState());
             console.log('action', action);
             result = next(action);
@@ -81634,10 +83017,12 @@ var clientLogger = function clientLogger(store) {
 var serverLogger = function serverLogger(store) {
     return function (next) {
         return function (action) {
-            console.log('/n dispatching server action');
-            console.log(action);
-            console.log('/n');
-            return next(action);
+            var result = void 0;
+            console.log('prev state', store.getState());
+            console.log('action', action);
+            result = next(action);
+            console.log('next state', store.getState());
+            return result;
         };
     };
 };
@@ -81646,12 +83031,16 @@ var middleware = function middleware(server) {
     return [server ? serverLogger : clientLogger, _reduxThunk2.default];
 };
 
-var saver = function saver(store) {
-    return function (next) {
-        return function (action) {
-            var result = next(action);
-            (0, _clearSet2.default)(store.getState(), _reserves2.default, _dishes2.default);
-            return result;
+var saver = function saver(server) {
+    return function (store) {
+        return function (next) {
+            return function (action) {
+                var result = next(action);
+                if (server) {
+                    (0, _clearSet2.default)(store.getState(), _reserves2.default, _dishes2.default);
+                }
+                return result;
+            };
         };
     };
 };
@@ -81659,8 +83048,9 @@ var saver = function saver(store) {
 var storeFactory = function storeFactory() {
     var server = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : false;
     var initialState = arguments[1];
-    return _redux.applyMiddleware.apply(undefined, _toConsumableArray(middleware(server)).concat([saver]))(_redux.createStore)((0, _redux.combineReducers)({ reserves: _storageConverters.reserves, dishes: _storageConverters.dishes }, initialState));
+    return _redux.applyMiddleware.apply(undefined, _toConsumableArray(middleware(server)).concat([saver(server)]))(_redux.createStore)((0, _redux.combineReducers)({ reserves: _storageConverters.reserves, dishes: _storageConverters.dishes }), initialState);
 };
+
 exports.default = storeFactory;
 
 /***/ })

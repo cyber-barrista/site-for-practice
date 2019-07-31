@@ -3,12 +3,12 @@ const path = require('path')
 
 module.exports = {
     entry: {
-        //userInfo: './src/frontend/user-info/index.js',
+        userInfo: './src/frontend/user-info/index.js',
         userReserve: './src/frontend/user-reserve/index.js',
-        //userDish: './src/frontend/user-dish/index.js',
-        //adminInfo: './src/frontend/admin-info/index.js',
-        //adminReserve: './src/frontend/admin-reserve/index.js',
-        //adminDish: './src/frontend/admin-dish/index.js',
+        userDish: './src/frontend/user-dish/index.js',
+        adminInfo: './src/frontend/admin-info/index.js',
+        adminReserve: './src/frontend/admin-reserve/index.js',
+        adminDish: './src/frontend/admin-dish/index.js',
         admin: './src/frontend/admin/index.js'
     },
     output: {
@@ -17,7 +17,7 @@ module.exports = {
         sourceMapFilename: 'sourceMap/[name].map'
     },
     devtool: 'source-map',
-    //watch: true,
+    watch: true,
     module: {
         rules: [
             {

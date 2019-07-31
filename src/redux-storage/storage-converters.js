@@ -43,7 +43,7 @@ const reserve = (state = {}, action) => {
         case constants.ADD_RESERV:
             console.log('here')
             return {
-                id: action._id,
+                _id: action._id,
                 eventDate: action.eventDate,
                 eventTime: action.eventTime,
                 quantity: action.quantity,
@@ -80,7 +80,7 @@ const dish = (state = {}, action) => {
                 }
         case constants.ADD_DISH:
             return {
-                id: action._id,
+                _id: action._id,
                 name: action.name,
                 smallDescription: action.smallDescription,
                 fullDescription: action.fullDescription,

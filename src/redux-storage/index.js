@@ -8,7 +8,7 @@ import Dish from '../database/dishes'
  */
 getState(Reserve, Dish).then(
     intialState => {
-        const store = storeFactory(true, intialState)
+        const store = storeFactory(false, intialState)
         console.log(store.getState())
     }
 )

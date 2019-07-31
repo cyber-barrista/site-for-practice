@@ -1,19 +1,21 @@
 import mongoose from 'mongoose'
 
 const dishShema = new mongoose.Schema(
-    {
+    [{
+        _id: String,
         name: String,
         smallDescription: String,
         fullDescription: String,
         recipes: [
             {
+                _id: String,
                 ingredient: String,
-                amount: Number,
+                amount: String,
                 unit: String,
             }
         ],
         urlOfImage: String,
-    },
+    }],
     {
         versionKey: false
     }

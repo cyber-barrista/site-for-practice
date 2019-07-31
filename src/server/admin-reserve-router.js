@@ -4,6 +4,7 @@ import constants from '../redux-storage/constants'
 import passport from './authentication/JwtPassport'
 
 const dispatchAndRespond = (req, res, action) => {
+    req.store.dispatch(action)
     res.status(200)
     res.json(action)
 }

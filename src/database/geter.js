@@ -22,6 +22,7 @@ const getState = async (reserveModel, dishModel) => {
             if (error) {
                 console.error(error)
             } else {
+                console.log('reserve geted')
                 reserves = result.slice()
             }
         }
@@ -33,6 +34,7 @@ const getState = async (reserveModel, dishModel) => {
             if (error) {
                 console.error(error)
             } else {
+                console.log('dish geted')
                 dishes = result.slice()
             }
         }

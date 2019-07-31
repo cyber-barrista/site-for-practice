@@ -25354,6 +25354,93 @@ if (!self.fetch) {
 
 /***/ }),
 
+/***/ "./src/frontend/admin/adminNavigation.js":
+/*!***********************************************!*\
+  !*** ./src/frontend/admin/adminNavigation.js ***!
+  \***********************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+    value: true
+});
+
+var _react = __webpack_require__(/*! react */ "./node_modules/react/index.js");
+
+var _react2 = _interopRequireDefault(_react);
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+var AdminNavigation = function AdminNavigation(props) {
+    return _react2.default.createElement(
+        "nav",
+        null,
+        _react2.default.createElement(
+            "p",
+            null,
+            "\u0421\u0442\u0440\u0430\u043D\u0438\u0446\u044B \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044F",
+            _react2.default.createElement(
+                "a",
+                { href: "../info" },
+                " \u0418\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u044F \u043E \u0440\u0435\u0441\u0442\u043E\u0440\u0430\u043D\u0435 "
+            ),
+            "|",
+            _react2.default.createElement(
+                "a",
+                { href: "../reserve" },
+                " \u0417\u0430\u043A\u0430\u0437 \u0441\u0442\u043E\u043B\u043E\u0432 "
+            ),
+            "|",
+            _react2.default.createElement(
+                "a",
+                { href: "../dish" },
+                " \u041C\u0435\u043D\u044E "
+            ),
+            "|",
+            _react2.default.createElement(
+                "a",
+                { href: "../admin" },
+                " \u0412\u0445\u043E\u0434"
+            )
+        ),
+        _react2.default.createElement(
+            "p",
+            null,
+            "\u0421\u0442\u0440\u0430\u043D\u0438\u0446\u044B \u0430\u0434\u043C\u0438\u043D\u0438\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0430:",
+            _react2.default.createElement(
+                "a",
+                { href: "../admin/info" },
+                " \u0418\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u044F \u043E \u0440\u0435\u0441\u0442\u043E\u0440\u0430\u043D\u0435 "
+            ),
+            "|",
+            _react2.default.createElement(
+                "a",
+                { href: "../admin/reserve" },
+                " \u0417\u0430\u043A\u0430\u0437 \u0441\u0442\u043E\u043B\u043E\u0432 "
+            ),
+            "|",
+            _react2.default.createElement(
+                "a",
+                { href: "../admin/dish" },
+                " \u041C\u0435\u043D\u044E "
+            ),
+            "|",
+            _react2.default.createElement(
+                "a",
+                { href: "../admin" },
+                " \u0412\u0445\u043E\u0434"
+            )
+        )
+    );
+};
+
+exports.default = AdminNavigation;
+
+/***/ }),
+
 /***/ "./src/frontend/admin/app.js":
 /*!***********************************!*\
   !*** ./src/frontend/admin/app.js ***!
@@ -25376,6 +25463,10 @@ var _autForm = __webpack_require__(/*! ./autForm */ "./src/frontend/admin/autFor
 
 var _autForm2 = _interopRequireDefault(_autForm);
 
+var _adminNavigation = __webpack_require__(/*! ./adminNavigation */ "./src/frontend/admin/adminNavigation.js");
+
+var _adminNavigation2 = _interopRequireDefault(_adminNavigation);
+
 var _toServerSender = __webpack_require__(/*! ./toServerSender */ "./src/frontend/admin/toServerSender.js");
 
 var _toServerSender2 = _interopRequireDefault(_toServerSender);
@@ -25383,9 +25474,14 @@ var _toServerSender2 = _interopRequireDefault(_toServerSender);
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
 var App = function App(props) {
-    return _react2.default.createElement(_autForm2.default, { sender: function sender(user, password) {
-            return (0, _toServerSender2.default)('/admin', 'POST', user, password);
-        } });
+    return _react2.default.createElement(
+        'div',
+        { className: 'logIn' },
+        _react2.default.createElement(_adminNavigation2.default, null),
+        _react2.default.createElement(_autForm2.default, { sender: function sender(user, password) {
+                return (0, _toServerSender2.default)('/admin', 'POST', user, password);
+            } })
+    );
 };
 
 exports.default = App;

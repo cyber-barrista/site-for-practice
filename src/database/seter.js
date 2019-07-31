@@ -19,6 +19,8 @@ const setState = (obj, reserveModel, dishModel) => {
             err => {
                 if (err) {
                     return console.error(err)
+                } else {
+                    console.log('saved')
                 }
             }
         )

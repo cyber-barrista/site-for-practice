@@ -2,6 +2,11 @@
 
 const users = [
     {
+      id: 0,
+        user: '1',
+        password: '1'
+    },
+    {
         id: 1,
         user: 'admin1',
         password: 'password1'
